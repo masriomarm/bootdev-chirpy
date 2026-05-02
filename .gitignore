@@ -1,3 +1,5 @@
 assets
 postgres-language-server.jsonc
 mytemp.mytemp.md
+.env
+bootdev-chirpy
