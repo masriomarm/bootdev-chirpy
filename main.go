@@ -1,16 +1,23 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
+	"github.com/masriomarm/bootdev-chirpy/internal/database"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	db             *database.Queries
 }
 
 func (cfg *apiConfig) mwMetricInc(next http.Handler) http.Handler {
@@ -111,8 +118,25 @@ func httpHandler_validate_chirp(res http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
+
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	if dbURL == "" {
+		log.Fatal("DB_URL must be set")
+	}
+
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatalf("Error init database: %v", err)
+	}
+
+	dbQueries := database.New(db)
+	cfg := apiConfig{
+		fileserverHits: atomic.Int32{},
+		db:             dbQueries,
+	}
+
 	servMux := http.NewServeMux()
-	cfg := apiConfig{}
 	servMux.Handle("/app/", cfg.mwMetricInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 
 	servMux.HandleFunc("GET /api/healthz", httpHandler_readiness)
