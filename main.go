@@ -9,7 +9,9 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/masriomarm/bootdev-chirpy/internal/database"
@@ -18,6 +20,7 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
+	platform       string
 }
 
 func (cfg *apiConfig) mwMetricInc(next http.Handler) http.Handler {
@@ -41,9 +44,70 @@ func (cfg *apiConfig) httpHandler_metricsGet(res http.ResponseWriter, req *http.
 }
 
 func (cfg *apiConfig) httpHandler_metricsRst(res http.ResponseWriter, req *http.Request) {
-	cfg.fileserverHits.Store(0)
-	res.WriteHeader(200) // 200 OK for now.
-	res.Write([]byte("OK"))
+	statusCode := 200
+	msgResponse := "OK"
+	if cfg.platform == "dev" {
+		// reset server hits
+		cfg.fileserverHits.Store(0)
+
+		// delete all users
+		err := cfg.db.DeleteUsers(req.Context())
+		if err != nil {
+			log.Printf("Error deleting users: %v", err)
+			statusCode = 500
+			msgResponse = "Error"
+		}
+
+	} else {
+		statusCode = 403
+		msgResponse = "Forbidden"
+	}
+	res.WriteHeader(statusCode)
+	res.Write([]byte(msgResponse))
+}
+
+func (cfg *apiConfig) httpHandler_userCreate(res http.ResponseWriter, req *http.Request) {
+	type reqBody struct {
+		Email string `json:"email"`
+	}
+
+	type resBody struct {
+		Id          uuid.UUID `json:"id"`
+		CreatedTime time.Time `json:"created_at"`
+		UpdatedTime time.Time `json:"updated_at"`
+		Email       string    `json:"email"`
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	input := reqBody{}
+
+	err := decoder.Decode(&input)
+	statusCode := 500
+	if err != nil {
+		log.Printf("Error decoding parameters: %v", err)
+		res.WriteHeader(statusCode)
+		return
+	}
+
+	user, err := cfg.db.CreateUser(req.Context(), input.Email)
+	if err != nil {
+		log.Printf("Error creating query: %v", err)
+		res.WriteHeader(statusCode)
+		return
+	}
+
+	ret := resBody{Id: user.ID, CreatedTime: user.CreatedAt, UpdatedTime: user.UpdatedAt, Email: user.Email}
+	dat, err := json.Marshal(ret)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		res.WriteHeader(statusCode)
+		return
+	}
+
+	statusCode = 201 // user created
+	res.Header().Add("Content-Type", "application/json")
+	res.WriteHeader(statusCode)
+	res.Write(dat)
 }
 
 func httpHandler_readiness(res http.ResponseWriter, req *http.Request) {
@@ -131,9 +195,11 @@ func main() {
 	}
 
 	dbQueries := database.New(db)
+	platform := os.Getenv("PLATFORM")
 	cfg := apiConfig{
 		fileserverHits: atomic.Int32{},
 		db:             dbQueries,
+		platform:       platform,
 	}
 
 	servMux := http.NewServeMux()
@@ -144,6 +210,8 @@ func main() {
 
 	servMux.HandleFunc("GET /admin/metrics", cfg.httpHandler_metricsGet)
 	servMux.HandleFunc("POST /admin/reset", cfg.httpHandler_metricsRst)
+
+	servMux.HandleFunc("POST /api/users", cfg.httpHandler_userCreate)
 
 	server := http.Server{Addr: ":8080", Handler: servMux}
 	log.Printf("Starting server: %v", &server)
