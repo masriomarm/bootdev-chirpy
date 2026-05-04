@@ -17,6 +17,22 @@ import (
 	"github.com/masriomarm/bootdev-chirpy/internal/database"
 )
 
+func err_response(res http.ResponseWriter, errMsg string, statucCode int) {
+
+	type errBody struct {
+		Error string `json:"error"`
+	}
+
+	log.Printf(errMsg)
+	dat, err := json.Marshal(errBody{Error: errMsg})
+	if err != nil {
+		log.Printf("Error while sending error ... LOL : %v", err)
+	}
+	res.Header().Add("Content-Type", "application/json")
+	res.WriteHeader(statucCode)
+	res.Write(dat)
+}
+
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
