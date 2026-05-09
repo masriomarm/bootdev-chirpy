@@ -131,6 +131,45 @@ func (cfg *apiConfig) httpHandler_chirpCreate(res http.ResponseWriter, req *http
 	res.Write(dat)
 }
 
+func (cfg *apiConfig) httpHandler_chirpGet(res http.ResponseWriter, req *http.Request) {
+	type reqBody struct {
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
+	}
+
+	type resBody struct {
+		Id          uuid.UUID `json:"id"`
+		CreatedTime time.Time `json:"created_at"`
+		UpdatedTime time.Time `json:"updated_at"`
+		Body        string    `json:"body"`
+		UserId      uuid.UUID `json:"user_id"`
+	}
+
+	chirps, err := cfg.db.GetChirp(req.Context())
+	if err != nil {
+		errMsg := fmt.Sprintf("Error creating query: %v", err)
+		err_response(res, errMsg, http.StatusInternalServerError)
+		return
+	}
+
+	ret := make([]resBody, 0, len(chirps))
+	for _, chirp := range chirps {
+		dbChirp := resBody{Id: chirp.ID, CreatedTime: chirp.CreatedAt, UpdatedTime: chirp.UpdatedAt, Body: chirp.Body, UserId: chirp.UserID}
+		ret = append(ret, dbChirp)
+	}
+
+	dat, err := json.Marshal(ret)
+	if err != nil {
+		errMsg := fmt.Sprintf("Error marshalling JSON: %s", err)
+		err_response(res, errMsg, http.StatusInternalServerError)
+		return
+	}
+
+	res.Header().Add("Content-Type", "application/json")
+	res.WriteHeader(http.StatusOK)
+	res.Write(dat)
+}
+
 func (cfg *apiConfig) httpHandler_userCreate(res http.ResponseWriter, req *http.Request) {
 	type reqBody struct {
 		Email string `json:"email"`
@@ -278,6 +317,7 @@ func main() {
 
 	servMux.HandleFunc("POST /api/users", cfg.httpHandler_userCreate)
 	servMux.HandleFunc("POST /api/chirps", cfg.httpHandler_chirpCreate)
+	servMux.HandleFunc("GET /api/chirps", cfg.httpHandler_chirpGet)
 
 	server := http.Server{Addr: ":8080", Handler: servMux}
 	log.Printf("Starting server: %v", &server)
