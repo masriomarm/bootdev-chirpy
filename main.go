@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/masriomarm/bootdev-chirpy/internal/auth"
 	"github.com/masriomarm/bootdev-chirpy/internal/database"
 )
 
@@ -210,7 +211,8 @@ func (cfg *apiConfig) httpHandler_chirpGet(res http.ResponseWriter, req *http.Re
 
 func (cfg *apiConfig) httpHandler_userCreate(res http.ResponseWriter, req *http.Request) {
 	type reqBody struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	type resBody struct {
@@ -231,7 +233,13 @@ func (cfg *apiConfig) httpHandler_userCreate(res http.ResponseWriter, req *http.
 		return
 	}
 
-	user, err := cfg.db.CreateUser(req.Context(), input.Email)
+	hashedPassword, err := auth.HashPassword(input.Password)
+	if err != nil {
+		err_response(res, "Failed to created password", http.StatusInternalServerError)
+		return
+	}
+
+	user, err := cfg.db.CreateUser(req.Context(), database.CreateUserParams{Email: input.Email, HashedPassword: hashedPassword})
 	if err != nil {
 		log.Printf("Error creating query: %v", err)
 		res.WriteHeader(statusCode)
@@ -247,6 +255,53 @@ func (cfg *apiConfig) httpHandler_userCreate(res http.ResponseWriter, req *http.
 	}
 
 	statusCode = 201 // user created
+	res.Header().Add("Content-Type", "application/json")
+	res.WriteHeader(statusCode)
+	res.Write(dat)
+}
+
+func (cfg *apiConfig) httpHandler_userLogin(res http.ResponseWriter, req *http.Request) {
+	type reqBody struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	type resBody struct {
+		Id          uuid.UUID `json:"id"`
+		CreatedTime time.Time `json:"created_at"`
+		UpdatedTime time.Time `json:"updated_at"`
+		Email       string    `json:"email"`
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	input := reqBody{}
+
+	err := decoder.Decode(&input)
+	if err != nil {
+		err_response(res, "Error reading inputs", http.StatusBadRequest)
+		return
+	}
+
+	user, err := cfg.db.GetUserByEmail(req.Context(), input.Email)
+	if err != nil {
+		err_response(res, "incorrect email or password", http.StatusUnauthorized)
+		return
+	}
+
+	match, err := auth.CheckPasswordHash(input.Password, user.HashedPassword)
+	if !match || (err != nil) {
+		err_response(res, "incorrect email or password", http.StatusUnauthorized)
+		return
+	}
+
+	ret := resBody{Id: user.ID, CreatedTime: user.CreatedAt, UpdatedTime: user.UpdatedAt, Email: user.Email}
+	dat, err := json.Marshal(ret)
+	if err != nil {
+		err_response(res, "Error sending data", http.StatusInternalServerError)
+		return
+	}
+
+	statusCode := http.StatusOK // user login
 	res.Header().Add("Content-Type", "application/json")
 	res.WriteHeader(statusCode)
 	res.Write(dat)
@@ -354,6 +409,7 @@ func main() {
 	servMux.HandleFunc("POST /admin/reset", cfg.httpHandler_metricsRst)
 
 	servMux.HandleFunc("POST /api/users", cfg.httpHandler_userCreate)
+	servMux.HandleFunc("POST /api/login", cfg.httpHandler_userLogin)
 	servMux.HandleFunc("POST /api/chirps", cfg.httpHandler_chirpCreate)
 	servMux.HandleFunc("GET /api/chirps", cfg.httpHandler_chirpGet)
 	servMux.HandleFunc("GET /api/chirps/{chirpID}", cfg.httpHandler_chirpGetByID)
