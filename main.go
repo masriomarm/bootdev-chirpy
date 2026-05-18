@@ -24,7 +24,7 @@ func err_response(res http.ResponseWriter, errMsg string, statucCode int) {
 		Error string `json:"error"`
 	}
 
-	log.Printf(errMsg)
+	log.Print(errMsg)
 	dat, err := json.Marshal(errBody{Error: errMsg})
 	if err != nil {
 		log.Printf("Error while sending error ... LOL : %v", err)
