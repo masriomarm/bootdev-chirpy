@@ -1,6 +1,9 @@
 package auth
 
 import (
+	"errors"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/alexedwards/argon2id"
@@ -48,4 +51,23 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	}
 
 	return uuid.Parse(userString)
+}
+
+func GetBearerToken(headers http.Header) (string, error) {
+	/*
+		Auth information will come into our server in the Authorization header. Its value will look like this:
+			`Bearer TOKEN_STRING`
+	*/
+
+	tokenString := headers.Get("Authorization")
+	if tokenString == "" {
+		return "", errors.New("Error, Authentication tag not found.")
+	}
+	// process tag
+	tokenString, found := strings.CutPrefix(tokenString, "Bearer ")
+	if !found {
+		return "", errors.New("Error, Authentication tag not as expected.")
+	}
+
+	return tokenString, nil
 }

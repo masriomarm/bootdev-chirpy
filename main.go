@@ -38,6 +38,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	keyJWT         string
 }
 
 func (cfg *apiConfig) mwMetricInc(next http.Handler) http.Handler {
@@ -85,8 +86,7 @@ func (cfg *apiConfig) httpHandler_metricsRst(res http.ResponseWriter, req *http.
 
 func (cfg *apiConfig) httpHandler_chirpCreate(res http.ResponseWriter, req *http.Request) {
 	type reqBody struct {
-		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
 	}
 
 	type resBody struct {
@@ -107,12 +107,23 @@ func (cfg *apiConfig) httpHandler_chirpCreate(res http.ResponseWriter, req *http
 		return
 	}
 
+	userToken, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		err_response(res, "Authentication failure", http.StatusUnauthorized)
+		return
+	}
+	userID, err := auth.ValidateJWT(userToken, cfg.keyJWT)
+	if err != nil {
+		err_response(res, "Couldn't verify user", http.StatusUnauthorized)
+		return
+	}
+
 	if app_chirp_valid(input.Body) == false {
 		err_response(res, "Chirp is too long", http.StatusBadRequest)
 		return
 	}
 
-	chirp, err := cfg.db.CreateChirp(req.Context(), database.CreateChirpParams{Body: app_chirp_profane_mask(input.Body), UserID: input.UserID})
+	chirp, err := cfg.db.CreateChirp(req.Context(), database.CreateChirpParams{Body: app_chirp_profane_mask(input.Body), UserID: userID})
 	if err != nil {
 		errMsg := fmt.Sprintf("Error creating query: %v", err)
 		err_response(res, errMsg, http.StatusInternalServerError)
@@ -264,6 +275,7 @@ func (cfg *apiConfig) httpHandler_userLogin(res http.ResponseWriter, req *http.R
 	type reqBody struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
+		Expire   *int   `json:"expires_in_seconds"`
 	}
 
 	type resBody struct {
@@ -271,6 +283,7 @@ func (cfg *apiConfig) httpHandler_userLogin(res http.ResponseWriter, req *http.R
 		CreatedTime time.Time `json:"created_at"`
 		UpdatedTime time.Time `json:"updated_at"`
 		Email       string    `json:"email"`
+		Token       string    `json:"token"`
 	}
 
 	decoder := json.NewDecoder(req.Body)
@@ -280,6 +293,13 @@ func (cfg *apiConfig) httpHandler_userLogin(res http.ResponseWriter, req *http.R
 	if err != nil {
 		err_response(res, "Error reading inputs", http.StatusBadRequest)
 		return
+	}
+	expireAfter := time.Hour
+	if input.Expire != nil {
+		expireRcv := time.Duration(*input.Expire) * time.Second
+		if expireRcv < time.Hour {
+			expireAfter = expireRcv
+		}
 	}
 
 	user, err := cfg.db.GetUserByEmail(req.Context(), input.Email)
@@ -294,7 +314,9 @@ func (cfg *apiConfig) httpHandler_userLogin(res http.ResponseWriter, req *http.R
 		return
 	}
 
-	ret := resBody{Id: user.ID, CreatedTime: user.CreatedAt, UpdatedTime: user.UpdatedAt, Email: user.Email}
+	token, err := auth.MakeJWT(user.ID, cfg.keyJWT, expireAfter)
+
+	ret := resBody{Id: user.ID, CreatedTime: user.CreatedAt, UpdatedTime: user.UpdatedAt, Email: user.Email, Token: token}
 	dat, err := json.Marshal(ret)
 	if err != nil {
 		err_response(res, "Error sending data", http.StatusInternalServerError)
@@ -393,10 +415,15 @@ func main() {
 
 	dbQueries := database.New(db)
 	platform := os.Getenv("PLATFORM")
+	secret := os.Getenv("KEY_JWT")
+	if secret == "" {
+		log.Fatal("Error init secret key KEY_JWT")
+	}
 	cfg := apiConfig{
 		fileserverHits: atomic.Int32{},
 		db:             dbQueries,
 		platform:       platform,
+		keyJWT:         secret,
 	}
 
 	servMux := http.NewServeMux()
